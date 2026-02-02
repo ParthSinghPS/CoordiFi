@@ -16,7 +16,9 @@ contract AccessRegistryTest is Test {
     function setUp() public {
         vm.prank(admin);
         registry = new AccessRegistry();
-        accessHash = keccak256(abi.encodePacked("NFT_WHITELIST", address(0x123), uint256(1), user));
+        accessHash = keccak256(
+            abi.encodePacked("NFT_WHITELIST", address(0x123), uint256(1), user)
+        );
         bytes32 leaf = keccak256(abi.encodePacked(accessHash, user));
         merkleRoot = leaf;
         proof = new bytes32[](0);
@@ -25,7 +27,9 @@ contract AccessRegistryTest is Test {
     function test_CreateAccessType() public {
         vm.prank(admin);
         registry.createAccessType(accessTypeId, "NFT Whitelist", merkleRoot);
-        AccessRegistry.AccessType memory at = registry.getAccessType(accessTypeId);
+        AccessRegistry.AccessType memory at = registry.getAccessType(
+            accessTypeId
+        );
         assertEq(at.merkleRoot, merkleRoot);
         assertTrue(at.active);
     }

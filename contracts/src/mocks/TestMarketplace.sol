@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
 contract TestMarketplace is IERC721Receiver {
-    
     struct Listing {
         address seller;
         address nftContract;
@@ -29,24 +28,31 @@ contract TestMarketplace is IERC721Receiver {
         require(msg.sender == owner, "Not owner");
         _;
     }
-    
+
     modifier nonReentrant() {
         require(!_locked, "Reentrant");
         _locked = true;
         _;
         _locked = false;
     }
-    
+
     constructor() {
         owner = msg.sender;
     }
-    
-    function list(address nftContract, uint256 tokenId, uint256 price) external nonReentrant returns (uint256) {
+
+    function list(
+        address nftContract,
+        uint256 tokenId,
+        uint256 price
+    ) external nonReentrant returns (uint256) {
         require(price > 0, "Price must be > 0");
-        require(IERC721(nftContract).ownerOf(tokenId) == msg.sender, "Not owner");
-        
+        require(
+            IERC721(nftContract).ownerOf(tokenId) == msg.sender,
+            "Not owner"
+        );
+
         IERC721(nftContract).transferFrom(msg.sender, address(this), tokenId);
-        
+
         uint256 listingId = nextListingId++;
         listings[listingId] = Listing({
             seller: msg.sender,
