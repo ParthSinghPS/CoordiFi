@@ -25,10 +25,21 @@ contract AccessRegistry is Ownable {
     mapping(address => bool) public authorizedVerifiers;
     bytes32[] public accessTypeIds;
 
-    event AccessTypeCreated(bytes32 indexed accessTypeId, string name, bytes32 merkleRoot);
-    event AccessTypeUpdated(bytes32 indexed accessTypeId, bytes32 newMerkleRoot);
+    event AccessTypeCreated(
+        bytes32 indexed accessTypeId,
+        string name,
+        bytes32 merkleRoot
+    );
+    event AccessTypeUpdated(
+        bytes32 indexed accessTypeId,
+        bytes32 newMerkleRoot
+    );
     event AccessTypeDeactivated(bytes32 indexed accessTypeId);
-    event AccessUsed(bytes32 indexed accessHash, bytes32 indexed accessTypeId, address indexed user);
+    event AccessUsed(
+        bytes32 indexed accessHash,
+        bytes32 indexed accessTypeId,
+        address indexed user
+    );
     event VerifierAuthorized(address indexed verifier, bool authorized);
 
     constructor() {
