@@ -25,10 +25,21 @@ contract AccessRegistry is Ownable {
     mapping(address => bool) public authorizedVerifiers;
     bytes32[] public accessTypeIds;
 
-    event AccessTypeCreated(bytes32 indexed accessTypeId, string name, bytes32 merkleRoot);
-    event AccessTypeUpdated(bytes32 indexed accessTypeId, bytes32 newMerkleRoot);
+    event AccessTypeCreated(
+        bytes32 indexed accessTypeId,
+        string name,
+        bytes32 merkleRoot
+    );
+    event AccessTypeUpdated(
+        bytes32 indexed accessTypeId,
+        bytes32 newMerkleRoot
+    );
     event AccessTypeDeactivated(bytes32 indexed accessTypeId);
-    event AccessUsed(bytes32 indexed accessHash, bytes32 indexed accessTypeId, address indexed user);
+    event AccessUsed(
+        bytes32 indexed accessHash,
+        bytes32 indexed accessTypeId,
+        address indexed user
+    );
     event VerifierAuthorized(address indexed verifier, bool authorized);
 
     constructor() {
@@ -62,9 +73,13 @@ contract AccessRegistry is Ownable {
         emit AccessTypeCreated(accessTypeId, name, merkleRoot);
     }
 
-    function updateMerkleRoot(bytes32 accessTypeId, bytes32 newMerkleRoot) external onlyOwner {
+    function updateMerkleRoot(
+        bytes32 accessTypeId,
+        bytes32 newMerkleRoot
+    ) external onlyOwner {
         if (newMerkleRoot == bytes32(0)) revert InvalidRoot();
-        if (accessTypes[accessTypeId].createdAt == 0) revert AccessTypeNotFound();
+        if (accessTypes[accessTypeId].createdAt == 0)
+            revert AccessTypeNotFound();
 
         accessTypes[accessTypeId].merkleRoot = newMerkleRoot;
         accessTypes[accessTypeId].updatedAt = block.timestamp;
@@ -72,13 +87,17 @@ contract AccessRegistry is Ownable {
     }
 
     function deactivateAccessType(bytes32 accessTypeId) external onlyOwner {
-        if (accessTypes[accessTypeId].createdAt == 0) revert AccessTypeNotFound();
+        if (accessTypes[accessTypeId].createdAt == 0)
+            revert AccessTypeNotFound();
         accessTypes[accessTypeId].active = false;
         accessTypes[accessTypeId].updatedAt = block.timestamp;
         emit AccessTypeDeactivated(accessTypeId);
     }
 
-    function setVerifierAuthorization(address verifier, bool authorized) external onlyOwner {
+    function setVerifierAuthorization(
+        address verifier,
+        bool authorized
+    ) external onlyOwner {
         authorizedVerifiers[verifier] = authorized;
         emit VerifierAuthorized(verifier, authorized);
     }
@@ -93,11 +112,13 @@ contract AccessRegistry is Ownable {
         for (uint256 i = 0; i < accessTypeIds.length; i++) {
             bytes32 accessTypeId = accessTypeIds[i];
             AccessType storage accessType = accessTypes[accessTypeId];
-            
+
             if (!accessType.active) continue;
 
-            bytes32 leaf = keccak256(abi.encodePacked(accessHash, accessHolder));
-            
+            bytes32 leaf = keccak256(
+                abi.encodePacked(accessHash, accessHolder)
+            );
+
             if (MerkleProof.verify(proof, accessType.merkleRoot, leaf)) {
                 return true;
             }
@@ -105,14 +126,19 @@ contract AccessRegistry is Ownable {
         return false;
     }
 
-    function markAccessUsed(bytes32 accessHash, address user) external onlyAuthorized {
+    function markAccessUsed(
+        bytes32 accessHash,
+        address user
+    ) external onlyAuthorized {
         if (usedAccess[accessHash]) revert AccessAlreadyUsed();
         usedAccess[accessHash] = true;
         accessUsedBy[accessHash] = user;
         emit AccessUsed(accessHash, bytes32(0), user);
     }
 
-    function getAccessType(bytes32 accessTypeId) external view returns (AccessType memory) {
+    function getAccessType(
+        bytes32 accessTypeId
+    ) external view returns (AccessType memory) {
         return accessTypes[accessTypeId];
     }
 
@@ -124,7 +150,9 @@ contract AccessRegistry is Ownable {
         return accessTypeIds.length;
     }
 
-    function isAuthorizedVerifier(address verifier) external view returns (bool) {
+    function isAuthorizedVerifier(
+        address verifier
+    ) external view returns (bool) {
         return authorizedVerifiers[verifier];
     }
 
@@ -133,7 +161,15 @@ contract AccessRegistry is Ownable {
         uint256 slotId,
         address accessHolder
     ) external pure returns (bytes32) {
-        return keccak256(abi.encodePacked("NFT_WHITELIST", nftContract, slotId, accessHolder));
+        return
+            keccak256(
+                abi.encodePacked(
+                    "NFT_WHITELIST",
+                    nftContract,
+                    slotId,
+                    accessHolder
+                )
+            );
     }
 
     function computeOTCAccessHash(
@@ -144,6 +180,17 @@ contract AccessRegistry is Ownable {
         uint256 buyAmount,
         uint256 nonce
     ) external pure returns (bytes32) {
-        return keccak256(abi.encodePacked("OTC_TRADE", maker, sellToken, buyToken, sellAmount, buyAmount, nonce));
+        return
+            keccak256(
+                abi.encodePacked(
+                    "OTC_TRADE",
+                    maker,
+                    sellToken,
+                    buyToken,
+                    sellAmount,
+                    buyAmount,
+                    nonce
+                )
+            );
     }
 }
