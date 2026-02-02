@@ -112,7 +112,6 @@ contract NFTEscrow is IERC721Receiver, ReentrancyGuard {
         nonReentrant
     {
         if (msg.value < mintPrice) revert InsufficientAmount();
-
         _updateStatus(Status.CAPITAL_LOCKED);
         emit CapitalLocked(capitalHolder, msg.value);
     }
@@ -130,7 +129,6 @@ contract NFTEscrow is IERC721Receiver, ReentrancyGuard {
             abi.encodeWithSignature("executeMint(bytes)", mintData)
         );
         if (!success) revert TransferFailed();
-
         emit MintExecuted(0, smartMintWallet);
     }
 

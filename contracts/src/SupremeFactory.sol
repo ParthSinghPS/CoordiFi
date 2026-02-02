@@ -56,7 +56,6 @@ contract SupremeFactory is Ownable, ISupremeFactory {
         address nftContract,
         uint256 mintPrice
     );
-
     event OTCEscrowDeployed(
         uint256 indexed instanceId,
         address indexed escrow,
@@ -66,7 +65,6 @@ contract SupremeFactory is Ownable, ISupremeFactory {
         uint256 amountA,
         uint256 amountB
     );
-
     event FreelanceEscrowDeployed(
         uint256 indexed instanceId,
         address indexed escrow,
@@ -75,7 +73,6 @@ contract SupremeFactory is Ownable, ISupremeFactory {
         uint256 totalAmount,
         uint256 milestoneCount
     );
-
     event InstanceStatusUpdated(
         uint256 indexed instanceId,
         EscrowStatus newStatus
