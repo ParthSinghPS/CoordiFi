@@ -31,11 +31,22 @@ export function ProjectDashboard() {
         requestRevision,
         raiseDispute,
         refetchAll,
+        getMilestoneDependencies,
+        checkDependenciesCompleted,
     } = useFreelanceEscrow(escrowAddress as `0x${string}` | undefined);
 
     // Modal states
     const [selectedMilestone, setSelectedMilestone] = useState<Milestone | null>(null);
     const [activeModal, setActiveModal] = useState<'submit' | 'approve' | 'revision' | 'dispute' | null>(null);
+    
+    // State for stored funding TX (persisted from Supabase)
+    const [storedFundingTx, setStoredFundingTx] = useState<string | null>(null);
+    
+    // State to keep funding card visible for a bit after tx completes
+    const [showFundingCardDelay, setShowFundingCardDelay] = useState(false);
+    
+    // State for milestone dependencies
+    const [milestoneDeps, setMilestoneDeps] = useState<Map<number, { deps: number[], completed: boolean }>>(new Map());
     
     // State for submitted work details (fetched from Supabase)
     const [submittedWorkDetails, setSubmittedWorkDetails] = useState<{
@@ -48,6 +59,52 @@ export function ProjectDashboard() {
         message?: string;
         requestedAt?: string;
     } | null>(null);
+
+    // Fetch stored funding TX from Supabase on load
+    useEffect(() => {
+        const fetchFundingTx = async () => {
+            if (escrowAddress) {
+                try {
+                    console.log('[ProjectDashboard] Fetching funding TX for:', escrowAddress);
+                    const txs = await txHistory.getByEscrow(escrowAddress);
+                    console.log('[ProjectDashboard] TX history:', txs);
+                    const fundingTx = txs.find(tx => tx.tx_type === 'deposit');
+                    if (fundingTx?.tx_hash) {
+                        console.log('[ProjectDashboard] Found funding TX:', fundingTx.tx_hash);
+                        setStoredFundingTx(fundingTx.tx_hash);
+                    }
+                } catch (err) {
+                    console.error('[ProjectDashboard] Failed to load funding TX:', err);
+                }
+            }
+        };
+        fetchFundingTx();
+    }, [escrowAddress]); // Fetch whenever escrowAddress is available, not dependent on phase
+
+    // Fetch milestone dependencies on load
+    useEffect(() => {
+        const fetchDependencies = async () => {
+            if (milestones.length > 0 && getMilestoneDependencies && checkDependenciesCompleted) {
+                const depsMap = new Map<number, { deps: number[], completed: boolean }>();
+                
+                for (const milestone of milestones) {
+                    const milestoneIndex = Number(milestone.milestoneId);
+                    try {
+                        const deps = await getMilestoneDependencies(milestone.milestoneId);
+                        const completed = await checkDependenciesCompleted(milestone.milestoneId);
+                        depsMap.set(milestoneIndex, { deps, completed });
+                    } catch (err) {
+                        console.error(`[ProjectDashboard] Failed to fetch deps for milestone ${milestoneIndex}:`, err);
+                        depsMap.set(milestoneIndex, { deps: [], completed: true });
+                    }
+                }
+                
+                setMilestoneDeps(depsMap);
+                console.log('[ProjectDashboard] Loaded milestone dependencies:', depsMap);
+            }
+        };
+        fetchDependencies();
+    }, [milestones, getMilestoneDependencies, checkDependenciesCompleted]);
 
     // Fetch submitted work from Supabase when opening approve modal
     useEffect(() => {
@@ -199,6 +256,21 @@ export function ProjectDashboard() {
                                 {escrowAddress} ↗
                             </a>
                         </div>
+                        {/* Show Funding TX if project is funded */}
+                        {projectInfo.currentPhase >= 1 && (storedFundingTx || depositTxHash) && (
+                            <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs text-green-500">✅ Funded:</span>
+                                <a
+                                    href={`https://sepolia.etherscan.io/tx/${storedFundingTx || depositTxHash}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-green-400 font-mono hover:text-green-300 transition-colors"
+                                    title="View funding transaction"
+                                >
+                                    {(storedFundingTx || depositTxHash)?.slice(0, 10)}...{(storedFundingTx || depositTxHash)?.slice(-8)} ↗
+                                </a>
+                            </div>
+                        )}
                         <p className="text-xs text-gray-600 mt-1">
                             💡 Click to see deposits, payments, and fee transfers
                         </p>
@@ -245,8 +317,8 @@ export function ProjectDashboard() {
                 <MilestoneProgressBar completed={completedMilestones} total={milestones.length} />
             </div>
 
-            {/* Deposit Section (Client Only) - Show if not yet funded (phase 0) */}
-            {isClient && projectInfo.currentPhase === 0 && (
+            {/* Deposit Section (Client Only) - Show if not yet funded OR if just funded (3s delay) */}
+            {isClient && (projectInfo.currentPhase === 0 || showFundingCardDelay) && (
                 <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-6 mb-6">
                     <div className="flex items-center justify-between flex-wrap gap-4">
                         <div>
@@ -262,6 +334,11 @@ export function ProjectDashboard() {
                                     const result = await depositFunds(projectInfo.totalAmount);
                                     if (result?.hash) {
                                         setDepositTxHash(result.hash);
+                                        setStoredFundingTx(result.hash); // Store for header display
+                                        
+                                        // Keep funding card visible for 3 seconds after tx
+                                        setShowFundingCardDelay(true);
+                                        setTimeout(() => setShowFundingCardDelay(false), 3000);
                                         
                                         // Update project status in Supabase
                                         if (escrowAddress) {
@@ -270,7 +347,7 @@ export function ProjectDashboard() {
                                             });
                                             
                                             // Log transaction
-                                            await txHistory.create({
+                                            await txHistory.add({
                                                 escrow_address: escrowAddress,
                                                 escrow_type: 'freelance',
                                                 tx_type: 'deposit',
@@ -323,31 +400,39 @@ export function ProjectDashboard() {
                     </div>
                 ) : (
                     <div className="grid gap-4">
-                        {milestones.map((milestone, index) => (
-                            <MilestoneCard
-                                key={milestone.milestoneId.toString()}
-                                milestone={milestone}
-                                index={index}
-                                isClient={isClient}
-                                isWorker={isWorker && milestone.worker.toLowerCase() === userAddress?.toLowerCase()}
-                                onSubmitWork={(id) => {
-                                    const m = milestones.find(ms => ms.milestoneId === id);
-                                    if (m) { setSelectedMilestone(m); setActiveModal('submit'); }
-                                }}
-                                onApprove={(id) => {
-                                    const m = milestones.find(ms => ms.milestoneId === id);
-                                    if (m) { setSelectedMilestone(m); setActiveModal('approve'); }
-                                }}
-                                onRequestRevision={(id) => {
-                                    const m = milestones.find(ms => ms.milestoneId === id);
-                                    if (m) { setSelectedMilestone(m); setActiveModal('revision'); }
-                                }}
-                                onDispute={(id) => {
-                                    const m = milestones.find(ms => ms.milestoneId === id);
-                                    if (m) { setSelectedMilestone(m); setActiveModal('dispute'); }
-                                }}
-                            />
-                        ))}
+                        {milestones.map((milestone, index) => {
+                            const milestoneIndex = Number(milestone.milestoneId);
+                            const depInfo = milestoneDeps.get(milestoneIndex) || { deps: [], completed: true };
+                            
+                            return (
+                                <MilestoneCard
+                                    key={milestone.milestoneId.toString()}
+                                    milestone={milestone}
+                                    index={index}
+                                    isClient={isClient}
+                                    isWorker={isWorker && milestone.worker.toLowerCase() === userAddress?.toLowerCase()}
+                                    dependencies={depInfo.deps}
+                                    areDependenciesCompleted={depInfo.completed}
+                                    allMilestones={milestones}
+                                    onSubmitWork={(id) => {
+                                        const m = milestones.find(ms => ms.milestoneId === id);
+                                        if (m) { setSelectedMilestone(m); setActiveModal('submit'); }
+                                    }}
+                                    onApprove={(id) => {
+                                        const m = milestones.find(ms => ms.milestoneId === id);
+                                        if (m) { setSelectedMilestone(m); setActiveModal('approve'); }
+                                    }}
+                                    onRequestRevision={(id) => {
+                                        const m = milestones.find(ms => ms.milestoneId === id);
+                                        if (m) { setSelectedMilestone(m); setActiveModal('revision'); }
+                                    }}
+                                    onDispute={(id) => {
+                                        const m = milestones.find(ms => ms.milestoneId === id);
+                                        if (m) { setSelectedMilestone(m); setActiveModal('dispute'); }
+                                    }}
+                                />
+                            );
+                        })}
                     </div>
                 )}
             </div>
