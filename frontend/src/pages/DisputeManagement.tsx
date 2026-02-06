@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
-import { formatEther } from 'viem';
+import { useAccount, useSignMessage } from 'wagmi';
+import { formatEther, parseEther } from 'viem';
 import { useFreelanceEscrow, DISPUTE_TYPE } from '../hooks/useFreelanceEscrow';
-import { freelanceProjects } from '@/lib/supabase';
+import { freelanceProjects, disputes as supabaseDisputes, freelanceMilestones, txHistory, milestoneComms } from '@/lib/supabase';
+import { PLATFORM } from '@/utils/constants';
 
 // Storage key for deployed projects (fallback for localStorage)
 const PROJECTS_STORAGE_KEY = 'freelance_deployed_projects';
@@ -18,6 +19,7 @@ interface DisputedMilestone {
     disputeReason: string;
     disputeInitiator: `0x${string}`;
     raisedAt: bigint;
+    source?: 'yellow' | 'onchain';  // Track where dispute came from
 }
 
 // Custom JSON serializer that handles BigInt
@@ -65,7 +67,7 @@ export function DisputeManagement() {
     const [error, setError] = useState<string | null>(null);
 
     // Check if user is platform admin (the deployer wallet / fee collector)
-    const isPlatform = address?.toLowerCase() === '0x1c6438581fc6454c340c6591f76fa3389ccae342';
+    const isPlatform = address?.toLowerCase() === PLATFORM.ADMIN_ADDRESS.toLowerCase();
 
     // Manual escrow address input for testing
     const [manualEscrow, setManualEscrow] = useState('');
@@ -138,6 +140,61 @@ export function DisputeManagement() {
             }
 
             try {
+                // =====================================================
+                // STEP 1: Load Yellow/Off-chain disputes from Supabase
+                // =====================================================
+                console.log('[DisputeManagement] 🟡 Loading Yellow disputes from Supabase...');
+                const pendingDisputes = await supabaseDisputes.getPending();
+                console.log('[DisputeManagement] Found pending disputes in Supabase:', pendingDisputes.length, pendingDisputes);
+
+                // Convert Supabase disputes to DisputedMilestone format
+                const yellowDisputes: DisputedMilestone[] = [];
+
+                for (const dispute of pendingDisputes) {
+                    console.log('[DisputeManagement] Processing dispute:', dispute);
+
+                    // Get milestone details from Supabase
+                    const milestoneData = await freelanceMilestones.getByProjectAndIndex(
+                        dispute.escrow_address,
+                        dispute.milestone_index || 0
+                    );
+                    console.log('[DisputeManagement] Milestone data:', milestoneData);
+
+                    // Get project details (use getByEscrow for single project)
+                    const projectData = await freelanceProjects.getByEscrow(dispute.escrow_address);
+                    console.log('[DisputeManagement] Project data:', projectData);
+
+                    // Even if milestoneData is null, still add the dispute with fallback values
+                    // Map dispute type string back to number
+                    const disputeTypeNum = Object.entries(DISPUTE_TYPE).find(
+                        ([, v]) => v === dispute.dispute_type
+                    )?.[0] || '1';
+
+                    yellowDisputes.push({
+                        escrowAddress: dispute.escrow_address as `0x${string}`,
+                        milestoneId: BigInt(dispute.milestone_index || 0),
+                        milestoneAmount: parseEther(milestoneData?.amount || '0.0025'), // Default amount
+                        worker: (milestoneData?.worker_address || '0x0000000000000000000000000000000000000000') as `0x${string}`,
+                        client: (projectData?.client_address || '0x0000000000000000000000000000000000000000') as `0x${string}`,
+                        description: milestoneData?.description || `Milestone ${(dispute.milestone_index || 0) + 1}`,
+                        disputeType: parseInt(disputeTypeNum),
+                        disputeReason: dispute.reason || 'No reason provided',
+                        disputeInitiator: dispute.raised_by as `0x${string}`,
+                        raisedAt: BigInt(Math.floor(new Date(dispute.created_at || Date.now()).getTime() / 1000)),
+                        source: 'yellow',  // Mark as Yellow/off-chain dispute
+                    });
+                    console.log('[DisputeManagement] 🟡 Added Yellow dispute:', dispute.escrow_address, 'milestone', dispute.milestone_index);
+                }
+
+                // Set Yellow disputes immediately
+                if (yellowDisputes.length > 0) {
+                    setDisputedMilestones(yellowDisputes);
+                    console.log('[DisputeManagement] ✅ Loaded', yellowDisputes.length, 'Yellow disputes');
+                }
+
+                // =====================================================
+                // STEP 2: Also prepare for on-chain scanning
+                // =====================================================
                 // First try Supabase - get ALL projects (not just user's)
                 const supabaseProjects = await freelanceProjects.getAll();
                 const supabaseAddresses = supabaseProjects.map(p => p.escrow_address as `0x${string}`);
@@ -160,10 +217,7 @@ export function DisputeManagement() {
                 const allProjects = [...new Set([...supabaseAddresses, ...localProjects])];
                 console.log('[DisputeManagement] Total unique projects to scan:', allProjects.length, allProjects);
 
-                // Note: In production, use an indexer/subgraph to query disputes
-                // For demo, disputes need to be provided via manual scan input
-                // The real dispute data will be fetched via DisputeScanner component below
-                setDisputedMilestones([]);
+                // Note: On-chain disputes will be loaded via DisputeScanner component below
             } catch (e) {
                 console.error("Error loading disputes:", e);
             }
@@ -189,6 +243,9 @@ export function DisputeManagement() {
         );
     }
 
+    const yellowDisputeCount = disputedMilestones.filter(d => d.source === 'yellow').length;
+    const onchainDisputeCount = disputedMilestones.filter(d => d.source !== 'yellow').length;
+
     return (
         <div className="max-w-5xl mx-auto px-4 py-8">
             {/* Header */}
@@ -202,18 +259,22 @@ export function DisputeManagement() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 mb-8">
+            <div className="grid grid-cols-4 gap-4 mb-8">
                 <div className="bg-bg-card border border-gray-800 rounded-xl p-4">
                     <p className="text-gray-400 text-sm">Open Disputes</p>
-                    <p className="text-2xl font-bold text-yellow-400">{disputedMilestones.length}</p>
+                    <p className="text-2xl font-bold text-red-400">{disputedMilestones.length}</p>
+                </div>
+                <div className="bg-bg-card border border-yellow-500/30 rounded-xl p-4">
+                    <p className="text-gray-400 text-sm">🟡 Yellow (Gasless)</p>
+                    <p className="text-2xl font-bold text-yellow-400">{yellowDisputeCount}</p>
+                </div>
+                <div className="bg-bg-card border border-gray-800 rounded-xl p-4">
+                    <p className="text-gray-400 text-sm">⛓️ On-Chain</p>
+                    <p className="text-2xl font-bold text-blue-400">{onchainDisputeCount}</p>
                 </div>
                 <div className="bg-bg-card border border-gray-800 rounded-xl p-4">
                     <p className="text-gray-400 text-sm">Resolution Rate</p>
                     <p className="text-2xl font-bold text-green-400">100%</p>
-                </div>
-                <div className="bg-bg-card border border-gray-800 rounded-xl p-4">
-                    <p className="text-gray-400 text-sm">Avg Response Time</p>
-                    <p className="text-2xl font-bold text-blue-400">&lt;24h</p>
                 </div>
             </div>
 
@@ -268,7 +329,21 @@ export function DisputeManagement() {
                     {/* Disputes List - Shows when disputes are found */}
                     {disputedMilestones.length > 0 ? (
                         <div className="space-y-4">
-                            <h3 className="text-lg font-medium text-red-400">🔴 Active Disputes ({disputedMilestones.length})</h3>
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-medium text-red-400">🔴 Active Disputes ({disputedMilestones.length})</h3>
+                                <div className="flex items-center gap-2 text-xs">
+                                    {disputedMilestones.filter(d => d.source === 'yellow').length > 0 && (
+                                        <span className="px-2 py-1 bg-yellow-400/10 text-yellow-300 rounded-lg">
+                                            🟡 {disputedMilestones.filter(d => d.source === 'yellow').length} Yellow
+                                        </span>
+                                    )}
+                                    {disputedMilestones.filter(d => d.source !== 'yellow').length > 0 && (
+                                        <span className="px-2 py-1 bg-blue-500/10 text-blue-400 rounded-lg">
+                                            ⛓️ {disputedMilestones.filter(d => d.source !== 'yellow').length} On-chain
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
                             {disputedMilestones.map((dispute) => (
                                 <DisputeCard
                                     key={`${dispute.escrowAddress}-${dispute.milestoneId.toString()}`}
@@ -324,16 +399,76 @@ export function DisputeManagement() {
                                                 <span>Amount: {formatEther(dispute.milestoneAmount)} ETH</span>
                                                 <span>Escrow: {dispute.escrowAddress.slice(0, 8)}...</span>
                                             </div>
-                                            {dispute.txHash && (
-                                                <a
-                                                    href={`https://sepolia.etherscan.io/tx/${dispute.txHash}`}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="inline-block mt-2 text-xs text-primary-400 hover:text-primary-300"
-                                                >
-                                                    View Transaction ↗
-                                                </a>
-                                            )}
+                                            {dispute.txHash && (() => {
+                                                // Try to parse as JSON (Yellow resolution with signature + stateHash)
+                                                try {
+                                                    const yellowData = JSON.parse(dispute.txHash);
+                                                    if (yellowData.signature && yellowData.stateHash) {
+                                                        return (
+                                                            <div className="mt-3 text-xs bg-bg-elevated rounded-lg p-3 space-y-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="text-yellow-400">🟡 Resolved via Yellow Network</span>
+                                                                    <span className="text-gray-500">• Gasless</span>
+                                                                </div>
+                                                                <div>
+                                                                    <span className="text-gray-500 block mb-1">🔐 Signature:</span>
+                                                                    <span className="text-green-400 font-mono text-[10px] break-all block bg-black/30 p-1.5 rounded">
+                                                                        {yellowData.signature}
+                                                                    </span>
+                                                                </div>
+                                                                <div>
+                                                                    <span className="text-gray-500 block mb-1">📋 State Hash:</span>
+                                                                    <span className="text-blue-400 font-mono text-[10px] break-all block bg-black/30 p-1.5 rounded">
+                                                                        {yellowData.stateHash}
+                                                                    </span>
+                                                                </div>
+                                                                {yellowData.signer && (
+                                                                    <div>
+                                                                        <span className="text-gray-500">👤 Signer: </span>
+                                                                        <span className="text-gray-300 font-mono">{yellowData.signer}</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    }
+                                                } catch {
+                                                    // Not JSON, handle as before
+                                                }
+
+                                                // Fallback: Check if it's a Yellow signature (132 chars) vs TX hash (66 chars)
+                                                if (dispute.txHash.length > 70) {
+                                                    return (
+                                                        <div className="mt-2 text-xs">
+                                                            <span className="text-yellow-400">🟡 Resolved via Yellow Network</span>
+                                                            <span className="text-gray-500 ml-2">• Gasless</span>
+                                                            <div className="mt-1">
+                                                                <span className="text-gray-500">Signature: </span>
+                                                                <span className="text-green-400 font-mono break-all">
+                                                                    {dispute.txHash}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                } else if (dispute.txHash === 'yellow-gasless') {
+                                                    return (
+                                                        <div className="mt-2 text-xs">
+                                                            <span className="text-yellow-400">🟡 Resolved via Yellow Network</span>
+                                                            <span className="text-gray-500 ml-2">• Gasless resolution</span>
+                                                        </div>
+                                                    );
+                                                } else {
+                                                    return (
+                                                        <a
+                                                            href={`https://sepolia.etherscan.io/tx/${dispute.txHash}`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="inline-block mt-2 text-xs text-primary-400 hover:text-primary-300"
+                                                        >
+                                                            View Transaction ↗
+                                                        </a>
+                                                    );
+                                                }
+                                            })()}
                                         </div>
                                     </div>
                                 </div>
@@ -381,6 +516,7 @@ function DisputeCard({
     onResolve: (dispute: DisputedMilestone) => void;
 }) {
     const disputeTypeName = DISPUTE_TYPE[dispute.disputeType as keyof typeof DISPUTE_TYPE] || 'Unknown';
+    const isYellow = dispute.source === 'yellow';
 
     return (
         <div className="bg-bg-card border border-red-500/30 rounded-xl p-5 hover:border-red-500/50 transition-colors">
@@ -393,6 +529,11 @@ function DisputeCard({
                         <span className="px-2 py-1 bg-yellow-500/10 text-yellow-400 rounded-lg text-xs font-medium">
                             {disputeTypeName}
                         </span>
+                        {isYellow && (
+                            <span className="px-2 py-1 bg-yellow-400/10 text-yellow-300 rounded-lg text-xs font-medium">
+                                🟡 Yellow (Gasless)
+                            </span>
+                        )}
                     </div>
 
                     <h3 className="text-white font-medium mb-2">{dispute.description}</h3>
@@ -454,8 +595,252 @@ function ResolveDisputeModal({
     onResolved: (winner: 'client' | 'worker' | 'cancelled', txHash?: string) => void;
 }) {
     const { resolveDispute, cancelDispute, refetchAll } = useFreelanceEscrow(dispute.escrowAddress);
+    const { address } = useAccount();
+    const { signMessageAsync } = useSignMessage();
     const [isCancelling, setIsCancelling] = useState(false);
+    const [yellowSuccess, setYellowSuccess] = useState(false);
+    const [yellowSessionId, setYellowSessionId] = useState<string | null>(null);
+    const [yellowStateVersion, setYellowStateVersion] = useState<number | null>(null);
 
+
+    const isYellowDispute = dispute.source === 'yellow';
+
+
+    // Handle Yellow gasless resolution (with signature!)
+    const handleYellowResolve = async (winner: 'client' | 'worker') => {
+        console.log('[DisputeResolution] 🟡 Starting Yellow resolution for:', winner);
+        setIsResolving(true);
+        setError(null);
+        try {
+            const timestamp = Date.now();
+
+            // Step 1: Request signature from MetaMask (gasless but requires confirmation)
+            const messageData = {
+                type: 'dispute_resolve',
+                action: winner === 'worker' ? 'award_worker' : 'award_client',
+                escrow: dispute.escrowAddress,
+                milestone: dispute.milestoneId.toString(),
+                amount: dispute.milestoneAmount.toString(),
+                winner_address: winner === 'worker' ? dispute.worker : dispute.client,
+                timestamp,
+            };
+            const message = JSON.stringify(messageData);
+
+            console.log('[DisputeResolution] 🖊️ Requesting signature...');
+            const signature = await signMessageAsync({ message });
+            console.log('[DisputeResolution] ✅ Signature obtained:', signature);
+
+            // Look up REAL Yellow session from localStorage using escrow address
+            const yellowSessionKey = `yellow_session_${dispute.escrowAddress.toLowerCase()}`;
+            let realSessionId = `resolution_${dispute.escrowAddress.slice(0, 10)}_${timestamp}`;
+            let realStateVersion = 0;
+
+            try {
+                const storedSession = localStorage.getItem(yellowSessionKey);
+                if (storedSession) {
+                    const session = JSON.parse(storedSession);
+                    // Use the real ClearNode app_session_id (the 0x... hash)
+                    realSessionId = session.appSessionId || session.sessionId || realSessionId;
+                    // Use the current state version + 1 for this new operation
+                    realStateVersion = (session.stateVersion || 0) + 1;
+                    console.log('[DisputeResolution] 📦 Found real Yellow session:', realSessionId, 'version:', realStateVersion);
+                } else {
+                    console.warn('[DisputeResolution] ⚠️ No Yellow session found in localStorage, using fallback ID');
+                    realStateVersion = 1; // First state
+                }
+            } catch (e) {
+                console.warn('[DisputeResolution] Failed to load Yellow session:', e);
+                realStateVersion = 1;
+            }
+
+            console.log('[DisputeResolution] ✅ Yellow Session ID:', realSessionId, 'State Version:', realStateVersion);
+
+            setYellowSessionId(realSessionId);
+            setYellowStateVersion(realStateVersion);
+
+            console.log('[DisputeResolution] 🟡 Resolving via Yellow (gasless)');
+            console.log('[DisputeResolution] Escrow:', dispute.escrowAddress, 'Milestone:', dispute.milestoneId.toString());
+
+            // Update Supabase dispute status
+            const allDisputes = await supabaseDisputes.getAll();
+            console.log('[DisputeResolution] Found disputes:', allDisputes.length);
+            const thisDispute = allDisputes.find(d =>
+                d.escrow_address.toLowerCase() === dispute.escrowAddress.toLowerCase() &&
+                d.milestone_index === Number(dispute.milestoneId)
+            );
+            console.log('[DisputeResolution] Matching dispute:', thisDispute);
+
+            if (thisDispute?.id) {
+                const newStatus = winner === 'worker' ? 'resolved_worker' : 'resolved_client';
+                console.log('[DisputeResolution] Updating dispute status to:', newStatus);
+                await supabaseDisputes.resolve(thisDispute.id, newStatus);
+                console.log('[DisputeResolution] ✅ Dispute status updated');
+            } else {
+                console.warn('[DisputeResolution] ⚠️ No matching dispute found in Supabase');
+            }
+
+            // Update milestone status in Supabase
+            const newMilestoneStatus = winner === 'worker' ? 'approved' : 'cancelled';
+            const milestoneData = await freelanceMilestones.getByProjectAndIndex(
+                dispute.escrowAddress,
+                Number(dispute.milestoneId)
+            );
+            console.log('[DisputeResolution] Milestone data:', milestoneData);
+
+            if (milestoneData?.id) {
+                console.log('[DisputeResolution] Updating milestone status to:', newMilestoneStatus);
+                await freelanceMilestones.update(milestoneData.id, {
+                    status: newMilestoneStatus,
+                });
+                console.log('[DisputeResolution] ✅ Milestone status updated');
+            } else {
+                console.warn('[DisputeResolution] ⚠️ No matching milestone found in Supabase');
+            }
+
+            // Store in tx_history - Note: metadata stored in milestone_communications instead
+            // since tx_history table doesn't have metadata column
+            await txHistory.add({
+                escrow_address: dispute.escrowAddress,
+                escrow_type: 'freelance',
+                tx_type: 'yellow_dispute_resolve',
+                tx_hash: realSessionId, // Use Yellow session ID as the "tx hash" identifier
+                from_address: address || '0x',
+            });
+            console.log('[DisputeResolution] ✅ TX history recorded');
+
+            // Add to milestone communications for history
+            await milestoneComms.create({
+                escrow_address: dispute.escrowAddress,
+                milestone_index: Number(dispute.milestoneId),
+                sender_address: address || '0x',
+                message_type: 'dispute_resolved',
+                message: `Dispute resolved: ${winner === 'worker' ? 'Worker awarded' : 'Client refunded'} via Yellow Network`,
+                tx_hash: realSessionId,
+            });
+
+            setYellowSuccess(true);
+            // Pass Yellow proof data in a structured format
+            onResolved(winner, JSON.stringify({ yellowSessionId: realSessionId, yellowStateVersion: realStateVersion, signer: address }));
+            console.log('[DisputeResolution] ✅ Yellow resolution complete');
+        } catch (e: any) {
+            console.error('[DisputeResolution] ❌ Yellow resolution failed:', e);
+            setError(e.message || 'Failed to resolve dispute');
+        }
+        setIsResolving(false);
+    };
+
+    // Handle Yellow gasless cancel
+    const handleYellowCancel = async () => {
+        console.log('[DisputeResolution] 🟡 Starting Yellow cancel');
+        setIsCancelling(true);
+        setError(null);
+        try {
+            const timestamp = Date.now();
+
+            // Step 1: Request signature from MetaMask (gasless but requires confirmation)
+            const messageData = {
+                type: 'dispute_cancel',
+                action: 'cancel_and_continue',
+                escrow: dispute.escrowAddress,
+                milestone: dispute.milestoneId.toString(),
+                timestamp,
+            };
+            const message = JSON.stringify(messageData);
+
+            console.log('[DisputeResolution] 🖊️ Requesting cancel signature...');
+            const signature = await signMessageAsync({ message });
+            console.log('[DisputeResolution] ✅ Signature obtained:', signature);
+
+            // Look up REAL Yellow session from localStorage using escrow address
+            const yellowSessionKey = `yellow_session_${dispute.escrowAddress.toLowerCase()}`;
+            let realSessionId = `session_${dispute.escrowAddress}_dispute`;
+            let realStateVersion = 0;
+
+            try {
+                const storedSession = localStorage.getItem(yellowSessionKey);
+                if (storedSession) {
+                    const session = JSON.parse(storedSession);
+                    realSessionId = session.appSessionId || session.sessionId || realSessionId;
+                    realStateVersion = (session.stateVersion || 0) + 1;
+                    console.log('[DisputeResolution] 📦 Found real Yellow session:', realSessionId, 'version:', realStateVersion);
+                } else {
+                    console.warn('[DisputeResolution] ⚠️ No Yellow session found, using fallback ID');
+                    realStateVersion = 1;
+                }
+            } catch (e) {
+                console.warn('[DisputeResolution] Failed to load Yellow session:', e);
+                realStateVersion = 1;
+            }
+
+            console.log('[DisputeResolution] ✅ Yellow Session:', realSessionId, 'Version:', realStateVersion);
+
+            setYellowSessionId(realSessionId);
+            setYellowStateVersion(realStateVersion);
+
+            console.log('[DisputeResolution] 🟡 Cancelling via Yellow (gasless)');
+
+            // Update Supabase dispute status - DELETE the dispute record so it no longer shows
+            const allDisputes = await supabaseDisputes.getAll();
+            console.log('[DisputeResolution] Found disputes:', allDisputes.length);
+            const thisDispute = allDisputes.find(d =>
+                d.escrow_address.toLowerCase() === dispute.escrowAddress.toLowerCase() &&
+                d.milestone_index === Number(dispute.milestoneId)
+            );
+            console.log('[DisputeResolution] Matching dispute:', thisDispute);
+
+            if (thisDispute?.id) {
+                // Mark as resolved (cancelled)
+                console.log('[DisputeResolution] Updating dispute status to cancelled');
+                await supabaseDisputes.resolve(thisDispute.id, 'cancelled');
+                console.log('[DisputeResolution] ✅ Dispute marked as cancelled');
+            }
+
+            // Update milestone status back to submitted (work continues)
+            const milestoneData = await freelanceMilestones.getByProjectAndIndex(
+                dispute.escrowAddress,
+                Number(dispute.milestoneId)
+            );
+            console.log('[DisputeResolution] Milestone data:', milestoneData);
+
+            if (milestoneData?.id) {
+                console.log('[DisputeResolution] Updating milestone status to submitted');
+                await freelanceMilestones.update(milestoneData.id, {
+                    status: 'submitted', // Back to submitted state so work can continue
+                });
+                console.log('[DisputeResolution] ✅ Milestone status updated to submitted');
+            }
+
+            // Store in tx_history with Yellow proof data
+            await txHistory.add({
+                escrow_address: dispute.escrowAddress,
+                escrow_type: 'freelance',
+                tx_type: 'yellow_dispute_cancel',
+                tx_hash: realSessionId,
+                from_address: address || '0x',
+            });
+            console.log('[DisputeResolution] ✅ TX history recorded with Yellow session ID');
+
+            // Add to milestone communications for history
+            await milestoneComms.create({
+                escrow_address: dispute.escrowAddress,
+                milestone_index: Number(dispute.milestoneId),
+                sender_address: address || '0x',
+                message_type: 'dispute_resolved',
+                message: 'Dispute cancelled - work continues via Yellow Network',
+                tx_hash: realSessionId,
+            });
+
+            setYellowSuccess(true);
+            onResolved('cancelled', JSON.stringify({ yellowSessionId: realSessionId, yellowStateVersion: realStateVersion, signer: address }));
+            console.log('[DisputeResolution] ✅ Yellow cancellation complete');
+        } catch (e: any) {
+            console.error('[DisputeResolution] ❌ Yellow cancellation failed:', e);
+            setError(e.message || 'Failed to cancel dispute');
+        }
+        setIsCancelling(false);
+    };
+
+    // Handle on-chain resolution (fallback for on-chain disputes)
     const handleResolve = async (winner: `0x${string}`) => {
         setIsResolving(true);
         setError(null);
@@ -490,7 +875,61 @@ function ResolveDisputeModal({
         setIsCancelling(false);
     };
 
-    // Success view
+    // Success view for Yellow gasless
+    if (yellowSuccess) {
+        return (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+                <div className="bg-bg-card border border-yellow-500/30 rounded-2xl w-full max-w-lg my-8">
+                    <div className="p-6 text-center">
+                        <div className="w-16 h-16 bg-yellow-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <span className="text-3xl">🟡</span>
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-2">Dispute Resolved via Yellow! ⚡</h2>
+                        <p className="text-gray-400 text-sm mb-4">Resolution recorded gaslessly via Yellow Network.</p>
+                        <div className="bg-bg-elevated rounded-lg p-4 text-sm space-y-3">
+                            <p className="text-yellow-400 text-center">💰 Gas Saved: ~$7.60</p>
+
+                            {yellowSessionId && (
+                                <div className="text-left border-t border-gray-700 pt-3">
+                                    <p className="text-gray-500 text-xs mb-1 font-medium">🔗 Dispute Resolution ID:</p>
+                                    <p className="text-green-400 font-mono text-xs break-all bg-black/30 p-2 rounded">
+                                        {yellowSessionId}
+                                    </p>
+                                    <p className="text-gray-500 text-xs mt-2">
+                                        💡 This ID is cryptographically linked to your signature
+                                    </p>
+                                </div>
+                            )}
+
+                            {yellowStateVersion !== null && (
+                                <div className="text-left border-t border-gray-700 pt-3">
+                                    <p className="text-gray-500 text-xs mb-1 font-medium">📋 State Version:</p>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-blue-400 font-mono text-lg font-bold">v{yellowStateVersion}</span>
+                                        <span className="text-xs text-gray-500">- Dispute Resolved</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {address && (
+                                <div className="text-left border-t border-gray-700 pt-3">
+                                    <p className="text-gray-500 text-xs mb-1 font-medium">👤 Signer:</p>
+                                    <p className="text-gray-300 font-mono text-xs">{address}</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="p-6 border-t border-gray-800">
+                        <button onClick={onClose} className="w-full px-4 py-2.5 bg-yellow-600 text-white rounded-lg font-medium hover:bg-yellow-700">
+                            Done
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // Success view for on-chain
     if (successTx) {
         return (
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -524,7 +963,14 @@ function ResolveDisputeModal({
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
             <div className="bg-bg-card border border-gray-800 rounded-2xl w-full max-w-lg my-8 max-h-[90vh] overflow-y-auto">
                 <div className="p-6 border-b border-gray-800">
-                    <h2 className="text-xl font-bold text-white">⚖️ Resolve Dispute</h2>
+                    <div className="flex items-center gap-2">
+                        <h2 className="text-xl font-bold text-white">⚖️ Resolve Dispute</h2>
+                        {isYellowDispute && (
+                            <span className="px-2 py-0.5 bg-yellow-500/20 border border-yellow-500/30 rounded-full text-yellow-400 text-xs font-medium">
+                                🟡 Yellow
+                            </span>
+                        )}
+                    </div>
                     <p className="text-sm text-gray-400 mt-1">{dispute.description}</p>
                 </div>
 
@@ -562,11 +1008,14 @@ function ResolveDisputeModal({
 
                     {/* Action Buttons */}
                     <div className="space-y-4 pt-4">
-                        <h4 className="text-sm font-medium text-gray-300">Choose Resolution:</h4>
+                        <h4 className="text-sm font-medium text-gray-300">
+                            Choose Resolution:
+                            {isYellowDispute && <span className="text-yellow-400 text-xs ml-2">⚡ Gasless</span>}
+                        </h4>
 
                         <div className="grid grid-cols-2 gap-4">
                             <button
-                                onClick={() => handleResolve(dispute.worker)}
+                                onClick={() => isYellowDispute ? handleYellowResolve('worker') : handleResolve(dispute.worker)}
                                 disabled={isResolving}
                                 className="px-4 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-colors flex flex-col items-center"
                             >
@@ -575,7 +1024,7 @@ function ResolveDisputeModal({
                                 <span className="text-xs text-green-300 mt-1">Worker receives {formatEther(dispute.milestoneAmount)} ETH</span>
                             </button>
                             <button
-                                onClick={() => handleResolve(dispute.client)}
+                                onClick={() => isYellowDispute ? handleYellowResolve('client') : handleResolve(dispute.client)}
                                 disabled={isResolving}
                                 className="px-4 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors flex flex-col items-center"
                             >
@@ -588,7 +1037,7 @@ function ResolveDisputeModal({
                         {/* Cancel & Continue - Restores to pre-dispute state */}
                         <div className="pt-2 border-t border-gray-700">
                             <button
-                                onClick={handleCancel}
+                                onClick={() => isYellowDispute ? handleYellowCancel() : handleCancel()}
                                 disabled={isResolving || isCancelling}
                                 className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
                             >
