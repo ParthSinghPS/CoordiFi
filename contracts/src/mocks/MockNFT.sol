@@ -12,7 +12,7 @@ contract MockNFT is ERC721, Ownable {
     event SlotAssigned(uint256 indexed slotId, address indexed holder);
     event SlotMinted(uint256 indexed slotId, address indexed minter, uint256 tokenId);
 
-    constructor() ERC721("Mock NFT", "MNFT") {
+    constructor() ERC721("Mock NFT", "MNFT") Ownable(msg.sender) {
         _nextTokenId = 1;
     }
 

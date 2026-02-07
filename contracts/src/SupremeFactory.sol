@@ -84,7 +84,7 @@ contract SupremeFactory is Ownable {
     error FeeTooHigh();
     error InstanceNotFound();
 
-    constructor(address _feeCollector) {
+    constructor(address _feeCollector) Ownable(msg.sender) {
         if (_feeCollector == address(0)) revert InvalidAddress();
         
         feeCollector = _feeCollector;
