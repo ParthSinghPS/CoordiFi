@@ -30,11 +30,11 @@ export function Navbar() {
                 <div className="flex h-16 items-center justify-between">
                     {/* Logo */}
                     <Link to="/" className="flex items-center gap-2">
-                        <div className="h-8 w-8 rounded-lg bg-primary-600 flex items-center justify-center">
-                            <span className="text-white font-bold text-sm">CP</span>
+                        <div className="h-10 w-10 rounded-lg overflow-hidden bg-bg-elevated">
+                            <img src="/CoordiFi.png" alt="CoordiFi" className="h-full w-full object-cover object-center scale-150" />
                         </div>
                         <span className="font-semibold text-lg hidden sm:block">
-                            Coordination Protocol
+                            CoordiFi
                         </span>
                     </Link>
 

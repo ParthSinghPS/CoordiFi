@@ -10,7 +10,7 @@ const STATUS_STYLES: Record<number, { bg: string; text: string; icon: string }> 
     1: { bg: 'bg-blue-500/10', text: 'text-blue-400', icon: '📤' }, // Submitted
     2: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', icon: '🔄' }, // UnderRevision
     3: { bg: 'bg-green-500/10', text: 'text-green-400', icon: '✅' }, // Approved
-    4: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', icon: '💰' }, // Paid
+    4: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', icon: '🎉' }, // Completed
     5: { bg: 'bg-red-500/10', text: 'text-red-400', icon: '⚠️' }, // Disputed
     6: { bg: 'bg-gray-500/10', text: 'text-gray-500', icon: '❌' }, // Cancelled
 };

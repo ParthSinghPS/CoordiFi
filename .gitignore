@@ -1,44 +1,54 @@
-# Dependencies
-node_modules/
-.pnp/
-.pnp.js
-
-# Build outputs
-dist/
-build/
-out/
-
-# Foundry
-contracts/cache/
+# =========================
+# Contracts (Foundry)
+# =========================
 contracts/out/
+contracts/cache/
 contracts/broadcast/
+contracts/lib/
+contracts/.env
 
-# Environment variables
+# =========================
+# Frontend (Vite + React)
+# =========================
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# =========================
+# Environment Files
+# =========================
 .env
 .env.local
 .env.*.local
 
-# IDE
-.idea/
+# =========================
+# IDE & Editor
+# =========================
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
 
-# OS
+# =========================
+# OS Generated
+# =========================
 .DS_Store
+.DS_Store?
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
+# =========================
 # Logs
+# =========================
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Test coverage
-coverage/
-coverage.json
-
+# =========================
 # Misc
-*.pem
-.vercel
+# =========================
+*.zip
+*.tar.gz

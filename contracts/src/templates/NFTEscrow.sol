@@ -4,29 +4,54 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "../../interfaces/ISupremeFactory.sol";
+import "../../interfaces/ISupreme.sol";
 
+// nft escrow for whitelist coordination - deployed as minimal proxy
+// flow: CREATED → FUNDED → MINTED → APPROVED → SOLD → SPLIT (or REFUNDED on timeout)
 contract NFTEscrow is IERC721Receiver, ReentrancyGuard {
     enum Status {
         CREATED,
-        CAPITAL_LOCKED,
+        FUNDED,
         MINTED,
-        SETTLED,
+        APPROVED,
+        SOLD,
+        SPLIT,
         REFUNDED
     }
 
+    // factory that deployed this
     address public factory;
+    
+    // instance id in factory
+    uint256 public instanceId;
+    
+    // participants
     address public wlHolder;
     address public capitalHolder;
-    address public nftContract;
     address public smartMintWallet;
-
+    
+    // nft details
+    address public nftContract;
+    uint256 public nftTokenId;
+    
+    // economics
     uint256 public mintPrice;
     uint256 public splitBPS;
-    uint256 public deadline;
-    uint256 public mintedTokenId;
-
+    uint256 public salePrice;
+    
+    // current status
     Status public status;
+    
+    // deadline
+    uint256 public deadline;
+    
+    // sale approval tracking
+    bool public wlApproved;
+    bool public capitalApproved;
+    uint256 public approvedSalePrice;
+    address public approvedMarketplace;
+    
+    // init flag
     bool private initialized;
 
     event Initialized(
@@ -35,173 +60,263 @@ contract NFTEscrow is IERC721Receiver, ReentrancyGuard {
         address nftContract,
         uint256 mintPrice
     );
-    event CapitalLocked(address indexed capitalHolder, uint256 amount);
-    event MintExecuted(uint256 indexed tokenId, address smartMintWallet);
-    event NFTVerified(uint256 indexed tokenId);
-    event Settled(
-        address indexed wlHolder,
-        address indexed capitalHolder,
+    event CapitalDeposited(address indexed from, uint256 amount);
+    event MintTriggered(address indexed by);
+    event NFTReceived(uint256 indexed tokenId);
+    event SaleApproved(address indexed approver, uint256 price, address marketplace);
+    event BothApproved(uint256 price, address marketplace);
+    event NFTSold(address indexed buyer, uint256 price);
+    event ProceedsSplit(
+        uint256 capitalShare,
         uint256 wlShare,
-        uint256 capitalShare
+        uint256 platformFee
     );
-    event Refunded(address indexed to, uint256 amount);
+    event TimeoutRefund(address indexed recipient, uint256 tokenId);
     event StatusChanged(Status oldStatus, Status newStatus);
 
     error AlreadyInitialized();
-    error NotWLHolder();
     error NotCapitalHolder();
+    error NotParticipant();
     error WrongStatus();
+    error WrongAmount();
     error Expired();
     error NotExpired();
-    error InsufficientAmount();
+    error NFTNotReceived();
+    error ApprovalMismatch();
+    error InsufficientPayment();
     error TransferFailed();
-    error InvalidTokenId();
-
-    modifier onlyWLHolder() {
-        if (msg.sender != wlHolder) revert NotWLHolder();
-        _;
-    }
 
     modifier onlyCapitalHolder() {
         if (msg.sender != capitalHolder) revert NotCapitalHolder();
         _;
     }
-
+    
+    modifier onlyParticipant() {
+        if (msg.sender != wlHolder && msg.sender != capitalHolder) {
+            revert NotParticipant();
+        }
+        _;
+    }
+    
     modifier inStatus(Status _status) {
         if (status != _status) revert WrongStatus();
         _;
     }
-
+    
     modifier notExpired() {
         if (block.timestamp > deadline) revert Expired();
         _;
     }
 
+    // init escrow instance - called by factory, once only
     function initialize(
         address _wlHolder,
         address _capitalHolder,
+        address _smartMintWallet,
         address _nftContract,
         uint256 _mintPrice,
         uint256 _splitBPS,
         uint256 _deadline,
-        address _smartMintWallet,
         address _factory
     ) external {
         if (initialized) revert AlreadyInitialized();
         initialized = true;
-
+        
         wlHolder = _wlHolder;
         capitalHolder = _capitalHolder;
+        smartMintWallet = _smartMintWallet;
         nftContract = _nftContract;
         mintPrice = _mintPrice;
         splitBPS = _splitBPS;
         deadline = _deadline;
-        smartMintWallet = _smartMintWallet;
         factory = _factory;
         status = Status.CREATED;
-
+        
         emit Initialized(_wlHolder, _capitalHolder, _nftContract, _mintPrice);
     }
 
-    function lockCapital()
-        external
-        payable
-        onlyCapitalHolder
-        inStatus(Status.CREATED)
-        notExpired
-        nonReentrant
+    // capital holder deposits eth - must be exactly mintPrice
+    function deposit() 
+        external 
+        payable 
+        onlyCapitalHolder 
+        inStatus(Status.CREATED) 
+        notExpired 
     {
-        if (msg.value < mintPrice) revert InsufficientAmount();
-        _updateStatus(Status.CAPITAL_LOCKED);
-        emit CapitalLocked(capitalHolder, msg.value);
+        if (msg.value != mintPrice) revert WrongAmount();
+        
+        _updateStatus(Status.FUNDED);
+        emit CapitalDeposited(msg.sender, msg.value);
     }
 
-    function executeMint(
-        bytes calldata mintData
-    )
-        external
-        onlyWLHolder
-        inStatus(Status.CAPITAL_LOCKED)
-        notExpired
+    // trigger nft mint via smart mint wallet
+    function executeMint(bytes calldata mintData) 
+        external 
+        inStatus(Status.FUNDED) 
+        notExpired 
         nonReentrant
     {
-        (bool success, ) = smartMintWallet.call{value: mintPrice}(
-            abi.encodeWithSignature("executeMint(bytes)", mintData)
-        );
-        if (!success) revert TransferFailed();
-        emit MintExecuted(0, smartMintWallet);
+        ISmartMintWallet(smartMintWallet).executeMint{value: mintPrice}(mintData);
+        
+        emit MintTriggered(msg.sender);
     }
-
-    function verifyMint(
-        uint256 tokenId
-    ) external onlyWLHolder inStatus(Status.CAPITAL_LOCKED) notExpired {
-        address owner = IERC721(nftContract).ownerOf(tokenId);
-        if (owner != smartMintWallet && owner != address(this))
-            revert InvalidTokenId();
-
-        if (owner == smartMintWallet) {
-            (bool success, ) = smartMintWallet.call(
-                abi.encodeWithSignature("transferToEscrow(uint256)", tokenId)
-            );
-            if (!success) revert TransferFailed();
+    
+    // verify nft received and take custody
+    function verifyMint(uint256 tokenId) 
+        external 
+        inStatus(Status.FUNDED) 
+        notExpired 
+    {
+        ISmartMintWallet(smartMintWallet).transferToEscrow(tokenId);
+        
+        if (IERC721(nftContract).ownerOf(tokenId) != address(this)) {
+            revert NFTNotReceived();
         }
-
-        mintedTokenId = tokenId;
+        
+        nftTokenId = tokenId;
         _updateStatus(Status.MINTED);
-        emit NFTVerified(tokenId);
+        emit NFTReceived(tokenId);
     }
 
-    function settle() external inStatus(Status.MINTED) nonReentrant {
-        require(
-            msg.sender == wlHolder || msg.sender == capitalHolder,
-            "Not participant"
-        );
+    // approve sale terms - both parties must approve matching terms
+    function approveSale(uint256 price, address marketplace) 
+        external 
+        onlyParticipant 
+        inStatus(Status.MINTED) 
+        notExpired 
+    {
+        if (msg.sender == wlHolder) {
+            approvedSalePrice = price;
+            approvedMarketplace = marketplace;
+            wlApproved = true;
+        } else {
+            if (price != approvedSalePrice) revert ApprovalMismatch();
+            if (marketplace != approvedMarketplace) revert ApprovalMismatch();
+            capitalApproved = true;
+        }
+        
+        emit SaleApproved(msg.sender, price, marketplace);
+        
+        if (wlApproved && capitalApproved) {
+            _updateStatus(Status.APPROVED);
+            IERC721(nftContract).approve(marketplace, nftTokenId);
+            emit BothApproved(price, marketplace);
+        }
+    }
 
+    // execute nft sale - buyer sends eth, gets nft
+    function executeSale() 
+        external 
+        payable 
+        inStatus(Status.APPROVED) 
+        nonReentrant
+    {
+        if (msg.value < approvedSalePrice) revert InsufficientPayment();
+        
+        IERC721(nftContract).safeTransferFrom(
+            address(this),
+            msg.sender,
+            nftTokenId
+        );
+        
+        salePrice = msg.value;
+        _updateStatus(Status.SOLD);
+        emit NFTSold(msg.sender, msg.value);
+    }
+
+    // distribute sale proceeds - profit: 0.5% fee, loss: 0.005% fee
+    function distributeSale() 
+        external 
+        inStatus(Status.SOLD) 
+        nonReentrant
+    {
+        uint256 balance = address(this).balance;
+        address feeCollector = ISupremeFactory(factory).feeCollector();
+        
+        uint256 platformFee;
+        uint256 remaining;
+        
+        if (balance > mintPrice) {
+            uint256 profit = balance - mintPrice;
+            platformFee = (profit * 50) / 10000;
+            remaining = balance - platformFee;
+        } else {
+            platformFee = (balance * 5) / 100000;
+            remaining = balance - platformFee;
+        }
+        
+        uint256 capitalShare;
+        uint256 wlShare;
+        
+        if (remaining > mintPrice) {
+            uint256 profitAfterFee = remaining - mintPrice;
+            uint256 capitalProfit = (profitAfterFee * splitBPS) / 10000;
+            capitalShare = mintPrice + capitalProfit;
+            wlShare = remaining - capitalShare;
+        } else {
+            capitalShare = remaining;
+            wlShare = 0;
+        }
+        
+        if (platformFee > 0) {
+            (bool sentPlatform, ) = feeCollector.call{value: platformFee}("");
+            if (!sentPlatform) revert TransferFailed();
+        }
+        
+        if (capitalShare > 0) {
+            (bool sentCapital, ) = capitalHolder.call{value: capitalShare}("");
+            if (!sentCapital) revert TransferFailed();
+        }
+        
+        if (wlShare > 0) {
+            (bool sentWL, ) = wlHolder.call{value: wlShare}("");
+            if (!sentWL) revert TransferFailed();
+        }
+        
+        ISupremeFactory(factory).recordSettlement(balance, platformFee);
+        
+        _updateStatus(Status.SPLIT);
+        emit ProceedsSplit(capitalShare, wlShare, platformFee);
+    }
+
+    // timeout refund - capital holder gets nft if coordination stalls after deadline
+    function timeoutRefund() 
+        external 
+        onlyCapitalHolder 
+        inStatus(Status.MINTED) 
+        nonReentrant
+    {
+        if (block.timestamp <= deadline) revert NotExpired();
+        
         IERC721(nftContract).safeTransferFrom(
             address(this),
             capitalHolder,
-            mintedTokenId
+            nftTokenId
         );
-
-        uint256 platformFeeBPS = ISupremeFactory(factory).platformFeeBPS();
-        address feeCollector = ISupremeFactory(factory).feeCollector();
-
-        uint256 totalValue = address(this).balance;
-        uint256 platformFee = (totalValue * platformFeeBPS) / 10000;
-        uint256 afterFee = totalValue - platformFee;
-
-        uint256 wlShare = (afterFee * splitBPS) / 10000;
-        uint256 capitalShare = afterFee - wlShare;
-
-        if (platformFee > 0) {
-            (bool feeSuccess, ) = feeCollector.call{value: platformFee}("");
-            if (!feeSuccess) revert TransferFailed();
-        }
-
-        (bool wlSuccess, ) = wlHolder.call{value: wlShare}("");
-        if (!wlSuccess) revert TransferFailed();
-
-        (bool capSuccess, ) = capitalHolder.call{value: capitalShare}("");
-        if (!capSuccess) revert TransferFailed();
-
-        ISupremeFactory(factory).recordSettlement(totalValue, platformFee);
-        _updateStatus(Status.SETTLED);
-
-        emit Settled(wlHolder, capitalHolder, wlShare, capitalShare);
-    }
-
-    function refund() external nonReentrant {
-        if (block.timestamp <= deadline) revert NotExpired();
-        if (status == Status.SETTLED || status == Status.REFUNDED)
-            revert WrongStatus();
-
+        
         uint256 balance = address(this).balance;
         if (balance > 0) {
-            (bool success, ) = capitalHolder.call{value: balance}("");
-            if (!success) revert TransferFailed();
-            emit Refunded(capitalHolder, balance);
+            (bool sent, ) = capitalHolder.call{value: balance}("");
+            if (!sent) revert TransferFailed();
         }
-
+        
+        _updateStatus(Status.REFUNDED);
+        emit TimeoutRefund(capitalHolder, nftTokenId);
+    }
+    
+    // refund capital if mint never happened after deadline
+    function refundCapital() 
+        external 
+        onlyCapitalHolder 
+        inStatus(Status.FUNDED) 
+        nonReentrant
+    {
+        if (block.timestamp <= deadline) revert NotExpired();
+        
+        uint256 balance = address(this).balance;
+        (bool sent, ) = capitalHolder.call{value: balance}("");
+        if (!sent) revert TransferFailed();
+        
         _updateStatus(Status.REFUNDED);
     }
 
@@ -210,23 +325,22 @@ contract NFTEscrow is IERC721Receiver, ReentrancyGuard {
         status = newStatus;
     }
 
-    function getDetails()
-        external
-        view
-        returns (
-            address _wlHolder,
-            address _capitalHolder,
-            address _nftContract,
-            uint256 _mintPrice,
-            uint256 _splitBPS,
-            uint256 _deadline,
-            Status _status
-        )
-    {
+    // get full escrow details
+    function getDetails() external view returns (
+        address _wlHolder,
+        address _capitalHolder,
+        address _nftContract,
+        uint256 _nftTokenId,
+        uint256 _mintPrice,
+        uint256 _splitBPS,
+        uint256 _deadline,
+        Status _status
+    ) {
         return (
             wlHolder,
             capitalHolder,
             nftContract,
+            nftTokenId,
             mintPrice,
             splitBPS,
             deadline,

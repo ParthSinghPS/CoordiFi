@@ -1,15 +1,29 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+// smart mint wallet interface - whitelisted wallet for escrow minting
 interface ISmartMintWallet {
-    event MintExecuted(uint256 indexed tokenId, address indexed escrow);
-    event ETHReceived(address indexed from, uint256 amount);
+    event MintExecuted(address indexed nftContract, uint256 tokenId);
+    event NFTTransferred(address indexed to, address indexed nftContract, uint256 tokenId);
 
-    function escrowContract() external view returns (address);
+    // escrow that controls this wallet
+    function escrow() external view returns (address);
+    
+    // nft contract address
     function nftContract() external view returns (address);
-    function mintExecuted() external view returns (bool);
-    function mintedTokenId() external view returns (uint256);
+    
+    // has this wallet minted yet
+    function hasMinted() external view returns (bool);
 
-    function executeMint(bytes calldata mintData) external payable;
-    function transferToEscrow(uint256 tokenId) external;
+    // execute arbitrary call for minting
+    function execute(address target, bytes calldata data) external payable returns (bytes memory result);
+    
+    // execute call with specific value
+    function executeWithValue(address target, bytes calldata data, uint256 value) external returns (bytes memory result);
+    
+    // transfer nft to escrow after mint
+    function transferNFTToEscrow(uint256 tokenId) external;
+    
+    // receive eth for minting
+    receive() external payable;
 }

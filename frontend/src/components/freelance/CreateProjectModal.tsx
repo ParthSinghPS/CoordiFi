@@ -197,7 +197,7 @@ export function CreateProjectModal({ isOpen, onClose, onSuccess }: CreateProject
                         // Save milestones
                         const milestonesData: FreelanceMilestoneDB[] = milestones.map((m, idx) => ({
                             project_id: savedProject.id!,
-                            milestone_index: idx,
+                            milestone_index: idx + 1, // Use 1-based index to match on-chain milestoneId
                             description: m.description || `Milestone ${idx + 1}: ${m.workerType}`,
                             worker_address: m.worker,
                             amount: m.amount,

@@ -9,10 +9,10 @@ export function Footer() {
                     {/* Brand */}
                     <div className="md:col-span-2">
                         <div className="flex items-center gap-2 mb-4">
-                            <div className="h-8 w-8 rounded-lg bg-primary-600 flex items-center justify-center">
-                                <span className="text-white font-bold text-sm">CP</span>
+                            <div className="h-10 w-10 rounded-lg overflow-hidden bg-bg-elevated">
+                                <img src="/CoordiFi.png" alt="CoordiFi" className="h-full w-full object-cover object-center scale-150" />
                             </div>
-                            <span className="font-semibold text-lg">Coordination Protocol</span>
+                            <span className="font-semibold text-lg">CoordiFi</span>
                         </div>
                         <p className="text-gray-400 text-sm max-w-md">
                             Trust-minimized coordination between access rights and capital.
@@ -75,7 +75,7 @@ export function Footer() {
                 {/* Bottom */}
                 <div className="mt-12 pt-8 border-t border-gray-800 flex flex-col md:flex-row justify-between items-center gap-4">
                     <p className="text-sm text-gray-500">
-                        © 2026 Coordination Protocol. MIT License.
+                        © 2026 CoordiFi. MIT License.
                     </p>
                     <div className="flex items-center gap-4">
                         <a

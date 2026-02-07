@@ -58,7 +58,7 @@ export const UNISWAP_POOLS = {
 import { mainnet } from 'viem/chains';
 const mainnetClient = createPublicClient({
     chain: mainnet,
-    transport: http('https://eth-mainnet.g.alchemy.com/v2/qc3dHU0i5tsPHP1uM8f3g'),
+    transport: http('https://eth-mainnet.g.alchemy.com/v2/37kP_zRtidZ8eO-Q1-Oig'),
 });
 
 // ============ Price Conversion ============

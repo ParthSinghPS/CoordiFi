@@ -3,13 +3,14 @@ import { parseEther } from "viem";
 import { useState, useCallback } from "react";
 import { CONTRACTS, SUPREME_FACTORY_ABI, INSTANCE_TYPE } from "../lib/contracts";
 
+// Types
 export interface DeployNFTEscrowParams {
     wlHolder: `0x${string}`;
     capitalHolder: `0x${string}`;
     nftContract: `0x${string}`;
-    mintPrice: string;
-    splitBPS: number;
-    deadline: number;
+    mintPrice: string; // ETH amount as string
+    splitBPS: number; // e.g., 7000 = 70%
+    deadline: number; // Unix timestamp
 }
 
 export interface DeployOTCEscrowParams {
@@ -18,22 +19,22 @@ export interface DeployOTCEscrowParams {
     assetB: `0x${string}`;
     amountA: bigint;
     amountB: bigint;
-    toleranceBPS: number;
-    deadline: number;
+    toleranceBPS: number; // e.g., 500 = 5%
+    deadline: number; // Unix timestamp
 }
 
 export interface MilestoneInput {
     worker: `0x${string}`;
     amount: bigint;
-    deadline: bigint;
+    deadline: bigint; // Unix timestamp
     revisionLimit: number;
     description: string;
-    dependencies: number[];
+    dependencies: number[]; // Array of milestone indices (0-based) that must complete first
 }
 
 export interface DeployFreelanceEscrowParams {
     client: `0x${string}`;
-    paymentToken: `0x${string}`;
+    paymentToken: `0x${string}`; // Use 0x0 for ETH
     totalAmount: bigint;
     milestones: MilestoneInput[];
 }
@@ -46,22 +47,32 @@ export interface EscrowInstance {
     status: number;
 }
 
+/**
+ * Hook for interacting with the Supreme Factory contract
+ */
 export function useSupreme() {
     const { address: userAddress } = useAccount();
     const publicClient = usePublicClient();
     const [pendingTx, setPendingTx] = useState<`0x${string}` | null>(null);
 
+    // Write contract instance
     const { writeContractAsync, isPending: isWritePending } = useWriteContract();
 
+    // Wait for transaction
     const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
         hash: pendingTx ?? undefined,
     });
 
+    // Clear pending TX when confirmed
     const clearPendingTx = useCallback(() => {
         setPendingTx(null);
     }, []);
 
+
+    // Helper: Extract escrow address from transaction logs
     const extractEscrowFromLogs = (logs: any[]): `0x${string}` | null => {
+        // Event structures all have: event XXXEscrowDeployed(uint256 indexed instanceId, address indexed escrow, ...)
+        // topic[0] = event signature, topic[1] = instanceId, topic[2] = escrow address
         const factoryAddress = CONTRACTS.SUPREME_FACTORY.toLowerCase();
 
         console.log('[useSupreme] Looking for logs from factory:', factoryAddress);
@@ -73,9 +84,13 @@ export function useSupreme() {
 
             console.log('[useSupreme] Log from:', logAddress, 'topics:', topicsCount, 'isFactory:', logAddress === factoryAddress);
 
+            // Check logs from the factory - FreelanceEscrowDeployed has 3 indexed params (instanceId, escrow, client)
+            // So we need at least 3 topics (signature + 2 indexed values = 3, or signature + 3 indexed = 4)
             if (logAddress === factoryAddress && log.topics && topicsCount >= 3) {
+                // topic[2] is the escrow address (second indexed parameter)
                 const escrowTopic = log.topics[2];
                 if (escrowTopic) {
+                    // Extract the address from the padded bytes32 (last 40 hex chars = 20 bytes)
                     const escrowAddress = `0x${escrowTopic.slice(-40)}` as `0x${string}`;
                     console.log('[useSupreme] ✅ Extracted escrow address:', escrowAddress);
                     return escrowAddress;
@@ -83,9 +98,11 @@ export function useSupreme() {
             }
         }
 
+        // Fallback: Try to find any log with 3+ topics that looks like a deploy event
         console.log('[useSupreme] Trying fallback extraction...');
         for (const log of logs) {
             if (log.topics && log.topics.length >= 3) {
+                // Check if topic[2] looks like an address (not zero)
                 const potentialAddress = log.topics[2];
                 if (potentialAddress && !potentialAddress.endsWith('0'.repeat(40))) {
                     const escrowAddress = `0x${potentialAddress.slice(-40)}` as `0x${string}`;
@@ -105,12 +122,14 @@ export function useSupreme() {
         functionName: "platformFeeBPS",
     });
 
+    // Read total instances
     const { data: totalInstances } = useReadContract({
         address: CONTRACTS.SUPREME_FACTORY as `0x${string}`,
         abi: SUPREME_FACTORY_ABI,
         functionName: "getTotalInstances",
     });
 
+    // Read user instances
     const { data: userInstanceIds, refetch: refetchUserInstances } = useReadContract({
         address: CONTRACTS.SUPREME_FACTORY as `0x${string}`,
         abi: SUPREME_FACTORY_ABI,
@@ -118,6 +137,10 @@ export function useSupreme() {
         args: userAddress ? [userAddress] : undefined,
     });
 
+    /**
+     * Deploy a new NFT Escrow instance
+     * Waits for confirmation and returns the escrow address
+     */
     const deployNFTEscrow = useCallback(async (params: DeployNFTEscrowParams) => {
         if (!publicClient) throw new Error("No public client");
 
@@ -139,10 +162,12 @@ export function useSupreme() {
             setPendingTx(hash);
             console.log('[useSupreme] NFT Escrow deploy TX submitted:', hash);
 
+            // Wait for transaction receipt
             console.log('[useSupreme] Waiting for confirmation...');
             const receipt = await publicClient.waitForTransactionReceipt({ hash });
             console.log('[useSupreme] TX confirmed, extracting escrow address...');
 
+            // Extract escrow address from logs
             const escrowAddress = extractEscrowFromLogs(receipt.logs);
 
             return { hash, escrowAddress };
@@ -152,6 +177,10 @@ export function useSupreme() {
         }
     }, [writeContractAsync, publicClient]);
 
+    /**
+     * Deploy a new OTC Escrow instance
+     * Waits for confirmation and returns the escrow address
+     */
     const deployOTCEscrow = useCallback(async (params: DeployOTCEscrowParams) => {
         if (!publicClient) throw new Error("No public client");
 
@@ -174,10 +203,12 @@ export function useSupreme() {
             setPendingTx(hash);
             console.log('[useSupreme] OTC Escrow deploy TX submitted:', hash);
 
+            // Wait for transaction receipt
             console.log('[useSupreme] Waiting for confirmation...');
             const receipt = await publicClient.waitForTransactionReceipt({ hash });
             console.log('[useSupreme] TX confirmed, extracting escrow address...');
 
+            // Extract escrow address from logs
             const escrowAddress = extractEscrowFromLogs(receipt.logs);
 
             return { hash, escrowAddress };
@@ -187,10 +218,16 @@ export function useSupreme() {
         }
     }, [writeContractAsync, publicClient]);
 
+    /**
+     * Deploy a new Freelance Escrow instance with milestones
+     * Single atomic transaction - milestones baked in at deployment
+     * Client pays 0.5% deployment fee at creation
+     */
     const deployFreelanceEscrow = useCallback(async (params: DeployFreelanceEscrowParams) => {
         if (!publicClient) throw new Error("No public client");
 
         try {
+            // Prepare milestone data for contract
             const milestonesForContract = params.milestones.map((m) => ({
                 worker: m.worker,
                 amount: m.amount,
@@ -200,7 +237,8 @@ export function useSupreme() {
                 dependencies: m.dependencies.map(d => BigInt(d)),
             }));
 
-            const deploymentFeeBPS = BigInt(50);
+            // Calculate 0.5% deployment fee
+            const deploymentFeeBPS = BigInt(50); // 0.5%
             const BPS_DENOMINATOR = BigInt(10000);
             const deploymentFee = (params.totalAmount * deploymentFeeBPS) / BPS_DENOMINATOR;
 
@@ -217,21 +255,26 @@ export function useSupreme() {
                     params.totalAmount,
                     milestonesForContract,
                 ],
-                value: deploymentFee,
+                value: deploymentFee, // 0.5% deployment fee sent to platform
             });
 
             setPendingTx(hash);
             console.log('[useSupreme] Freelance Escrow deploy TX submitted:', hash);
 
+
+            // Wait for transaction receipt
             console.log('[useSupreme] Waiting for confirmation...');
             const receipt = await publicClient.waitForTransactionReceipt({ hash });
             console.log('[useSupreme] TX confirmed, receipt status:', receipt.status, 'logs:', receipt.logs.length);
 
+            // Try to extract escrow address from logs first
             let escrowAddress = extractEscrowFromLogs(receipt.logs);
 
+            // FALLBACK: If logs are empty, use direct RPC call to alternative endpoint
             if (!escrowAddress && receipt.logs.length === 0) {
                 console.log('[useSupreme] Logs empty, trying direct RPC fallback...');
 
+                // Try multiple public Sepolia RPC endpoints
                 const rpcEndpoints = [
                     'https://rpc.sepolia.org',
                     'https://ethereum-sepolia.publicnode.com',
@@ -257,6 +300,7 @@ export function useSupreme() {
                         if (rpcData.result && rpcData.result.logs && rpcData.result.logs.length > 0) {
                             console.log('[useSupreme] RPC returned', rpcData.result.logs.length, 'logs');
 
+                            // Parse logs - they come as hex strings
                             const logs = rpcData.result.logs;
                             const factoryAddress = CONTRACTS.SUPREME_FACTORY.toLowerCase();
 
@@ -267,6 +311,7 @@ export function useSupreme() {
                                 console.log('[useSupreme] RPC Log:', logAddress, 'topics:', topics.length);
 
                                 if (logAddress === factoryAddress && topics.length >= 3) {
+                                    // topic[2] is the escrow address
                                     const escrowTopic = topics[2];
                                     if (escrowTopic) {
                                         escrowAddress = `0x${escrowTopic.slice(-40)}` as `0x${string}`;
@@ -293,6 +338,9 @@ export function useSupreme() {
         }
     }, [writeContractAsync, publicClient]);
 
+    /**
+     * Get instance details by ID
+     */
     const useInstanceDetails = (instanceId: number) => {
         return useReadContract({
             address: CONTRACTS.SUPREME_FACTORY as `0x${string}`,
@@ -303,21 +351,25 @@ export function useSupreme() {
     };
 
     return {
+        // State
         isLoading: isWritePending || isConfirming,
         isConfirmed,
         pendingTx,
         clearPendingTx,
 
+        // Data
         platformFeeBPS: platformFeeBPS ? Number(platformFeeBPS) / 100 : 5,
         totalInstances: totalInstances ? Number(totalInstances) : 0,
         userInstanceIds: userInstanceIds as bigint[] | undefined,
 
+        // Actions
         deployNFTEscrow,
         deployOTCEscrow,
         deployFreelanceEscrow,
         refetchUserInstances,
         useInstanceDetails,
 
+        // Constants
         INSTANCE_TYPE,
     };
 }

@@ -700,6 +700,7 @@ export function NFTOfferProcess() {
                             {/* Step 2: Verify Mint - Only active after mint */}
                             <div className={`p-3 rounded-lg ${!txHistory.mint ? 'bg-bg-dark opacity-50' : 'bg-bg-dark'}`}>
                                 <h4 className="text-sm font-medium text-white mb-2">Step 2: Verify Mint</h4>
+                                <p className="text-xs text-gray-500 mb-2">Token ID is the unique on-chain identifier assigned to your NFT upon minting. Find it in the mint transaction on Etherscan. This ID is needed for transfers and trading.</p>
                                 <input
                                     type="text"
                                     placeholder="Token ID (check Etherscan for minted ID)"
@@ -803,18 +804,35 @@ export function NFTOfferProcess() {
                                     onChange={(e) => setBuyerAddress(e.target.value)}
                                     className="w-full px-3 py-2 bg-bg-dark border border-gray-700 rounded-lg text-white text-sm"
                                 />
-                                <button
-                                    onClick={handleApprove}
-                                    disabled={isLoading || !isParticipant}
-                                    className={`w-full py-3 rounded-lg font-medium ${isParticipant
-                                        ? 'bg-primary-500 text-white hover:bg-primary-600'
-                                        : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                        }`}
-                                >
-                                    {isLoading ? 'Processing...' :
-                                        !isParticipant ? 'Only Participants' :
-                                            'Submit Approval'}
-                                </button>
+                                {/* Validation: Buyer must be different from participants */}
+                                {buyerAddress && details && (
+                                    buyerAddress.toLowerCase() === details.wlHolder.toLowerCase() ||
+                                    buyerAddress.toLowerCase() === details.capitalHolder.toLowerCase()
+                                ) && (
+                                        <p className="text-red-400 text-xs">⚠️ Buyer must be different from WL holder and capital holder</p>
+                                    )}
+                                {/* Show button state based on user's approval status */}
+                                {(isWLHolder && approvalStatus.wlApproved) || (isCapitalHolder && approvalStatus.capitalApproved) ? (
+                                    <div className="w-full py-3 rounded-lg font-medium bg-green-500/20 border border-green-500/30 text-center">
+                                        <span className="text-green-400">✓ You have approved this sale</span>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={handleApprove}
+                                        disabled={isLoading || !isParticipant || Boolean(buyerAddress && details && (
+                                            buyerAddress.toLowerCase() === details.wlHolder.toLowerCase() ||
+                                            buyerAddress.toLowerCase() === details.capitalHolder.toLowerCase()
+                                        ))}
+                                        className={`w-full py-3 rounded-lg font-medium ${isParticipant
+                                            ? 'bg-primary-500 text-white hover:bg-primary-600'
+                                            : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                            }`}
+                                    >
+                                        {isLoading ? 'Processing...' :
+                                            !isParticipant ? 'Only Participants' :
+                                                'Submit Approval'}
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </PhaseCard>

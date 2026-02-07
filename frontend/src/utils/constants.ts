@@ -35,7 +35,7 @@ export const PLATFORM = {
     FEE_BPS: 500, // 5%
     PRICE_TOLERANCE_BPS: 500, // 5% price tolerance for OTC
     DEFAULT_DEADLINE_HOURS: 24,
-    ADMIN_ADDRESS: '0x1C6438581fC6454c340c6591F76Fa3389CcaE342', // Platform deployer wallet
+    ADMIN_ADDRESS: '0xbdF838FFB4D8B356B69DD4CB6cDb2167d085Fc9A', // Platform deployer wallet (new)
 } as const;
 
 export const LINKS = {

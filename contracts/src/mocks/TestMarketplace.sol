@@ -4,7 +4,9 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
+// simple nft marketplace for testnet demos
 contract TestMarketplace is IERC721Receiver {
+    
     struct Listing {
         address seller;
         address nftContract;
@@ -28,31 +30,25 @@ contract TestMarketplace is IERC721Receiver {
         require(msg.sender == owner, "Not owner");
         _;
     }
-
+    
     modifier nonReentrant() {
         require(!_locked, "Reentrant");
         _locked = true;
         _;
         _locked = false;
     }
-
+    
     constructor() {
         owner = msg.sender;
     }
-
-    function list(
-        address nftContract,
-        uint256 tokenId,
-        uint256 price
-    ) external nonReentrant returns (uint256) {
+    
+    // list an nft for sale
+    function list(address nftContract, uint256 tokenId, uint256 price) external nonReentrant returns (uint256) {
         require(price > 0, "Price must be > 0");
-        require(
-            IERC721(nftContract).ownerOf(tokenId) == msg.sender,
-            "Not owner"
-        );
-
+        require(IERC721(nftContract).ownerOf(tokenId) == msg.sender, "Not owner");
+        
         IERC721(nftContract).transferFrom(msg.sender, address(this), tokenId);
-
+        
         uint256 listingId = nextListingId++;
         listings[listingId] = Listing({
             seller: msg.sender,
@@ -66,6 +62,7 @@ contract TestMarketplace is IERC721Receiver {
         return listingId;
     }
     
+    // buy a listed nft
     function buy(uint256 listingId) external payable nonReentrant {
         Listing storage listing = listings[listingId];
         
@@ -87,6 +84,7 @@ contract TestMarketplace is IERC721Receiver {
         emit Sold(listingId, msg.sender, listing.price);
     }
     
+    // cancel a listing
     function cancel(uint256 listingId) external nonReentrant {
         Listing storage listing = listings[listingId];
         
@@ -98,6 +96,7 @@ contract TestMarketplace is IERC721Receiver {
         emit Cancelled(listingId);
     }
     
+    // withdraw platform fees
     function withdrawFees() external onlyOwner {
         payable(owner).transfer(address(this).balance);
     }

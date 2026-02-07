@@ -8,34 +8,22 @@ import { useState } from 'react';
 // SDK/Sponsor logos and info
 const SDKS = [
     {
+        name: 'Yellow',
+        tagline: 'Clearing network for Web3',
+        logo: '🟡',
+        color: 'text-yellow-400',
+    },
+    {
         name: 'Uniswap',
         tagline: 'Decentralized price validation',
         logo: '🦄',
         color: 'text-pink-400',
     },
     {
-        name: 'LI.FI',
-        tagline: 'Any-token to any-chain routing',
-        logo: '◈',
-        color: 'text-purple-400',
-    },
-    {
         name: 'Ethereum',
         tagline: 'Deployed on Ethereum Sepolia',
         logo: '◆',
         color: 'text-blue-400',
-    },
-    {
-        name: 'Base',
-        tagline: 'Coming soon: Base Mainnet',
-        logo: '◉',
-        color: 'text-cyan-400',
-    },
-    {
-        name: 'Supabase',
-        tagline: 'Real-time database & auth',
-        logo: '⚡',
-        color: 'text-green-400',
     },
 ];
 
